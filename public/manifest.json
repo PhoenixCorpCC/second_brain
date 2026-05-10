@@ -1,0 +1,27 @@
+{
+  "name": "Second Brain",
+  "short_name": "Brain",
+  "description": "Personal knowledge capture and spaced repetition",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/second_brain/",
+  "scope": "/second_brain/",
+  "background_color": "#f5f0e8",
+  "theme_color": "#1a1a1a",
+  "icons": [
+    { "src": "/second_brain/icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/second_brain/icons/192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/second_brain/icons/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "/second_brain/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [{ "name": "file", "accept": ["application/epub+zip", "application/pdf"] }]
+    }
+  }
+}

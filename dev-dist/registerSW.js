@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/second_brain/dev-sw.js?dev-sw', { scope: '/second_brain/', type: 'module' })
