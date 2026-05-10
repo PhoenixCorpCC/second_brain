@@ -3,6 +3,7 @@ import { db } from '../lib/db.js'
 import { buildNote } from '../lib/noteWriter.js'
 import { enqueue } from '../lib/queueManager.js'
 import { readSharedData, isShareReturn, clearShareParam } from '../lib/shareHandler.js'
+import { pushNote, pushLocalState, isConnected } from '../lib/drive.js'
 
 export default function CaptureScreen({ onOpenSettings }) {
   const [title, setTitle]   = useState('')
@@ -13,7 +14,6 @@ export default function CaptureScreen({ onOpenSettings }) {
   const [toast, setToast]   = useState('')
   const bodyRef = useRef(null)
 
-  // Handle incoming Web Share Target data
   useEffect(() => {
     if (!isShareReturn()) return
     clearShareParam()
@@ -26,7 +26,7 @@ export default function CaptureScreen({ onOpenSettings }) {
   }, [])
 
   async function handleSave() {
-    const noteTitle = title.trim() || (body.trim().split('\n')[0].slice(0, 60)) || 'Untitled'
+    const noteTitle = title.trim() || body.trim().split('\n')[0].slice(0, 60) || 'Untitled'
     const noteBody  = body.trim()
 
     if (!noteBody && !url.trim()) {
@@ -46,6 +46,12 @@ export default function CaptureScreen({ onOpenSettings }) {
 
       await db.notes.add(note.meta)
       await enqueue({ noteId: note.id, notePath: note.path, type: sourceType, sourceUrl: url.trim() })
+
+      // Push to Drive in background — don't block the UI
+      if (await isConnected()) {
+        pushNote(note).catch(err => console.warn('[Drive] pushNote failed:', err))
+        pushLocalState().catch(err => console.warn('[Drive] pushLocalState failed:', err))
+      }
 
       setTitle('')
       setBody('')
@@ -130,7 +136,7 @@ export default function CaptureScreen({ onOpenSettings }) {
       </button>
 
       <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-light)', marginTop: 12 }}>
-        Saved offline · AI enrichment runs on PC
+        Saved offline · syncs to Drive if connected
       </p>
     </>
   )

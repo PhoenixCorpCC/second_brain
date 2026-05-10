@@ -10,6 +10,10 @@ db.version(1).stores({
   sync_queue: '++id, operation, path, created_at'
 })
 
+db.version(2).stores({
+  settings: 'key'
+})
+
 export async function seedIfEmpty() {
   const count = await db.flashcards.count()
   if (count > 0) return

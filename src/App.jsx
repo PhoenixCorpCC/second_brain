@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import CaptureScreen  from './components/CaptureScreen.jsx'
 import QueueScreen    from './components/QueueScreen.jsx'
 import ReviewScreen   from './components/ReviewScreen.jsx'
 import SearchScreen   from './components/SearchScreen.jsx'
 import Settings       from './components/Settings.jsx'
 import NoteViewer     from './components/NoteViewer.jsx'
+import { handleOAuthCallback, syncAll } from './lib/drive.js'
 
 const TABS = [
   { id: 'capture', label: 'Capture', icon: IconCapture },
@@ -14,9 +15,32 @@ const TABS = [
 ]
 
 export default function App() {
-  const [tab, setTab]         = useState('capture')
-  const [viewNote, setViewNote] = useState(null)  // { body, title }
+  const [tab, setTab]           = useState('capture')
+  const [viewNote, setViewNote] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [syncing, setSyncing]   = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code   = params.get('code')
+
+    if (code) {
+      // Clean URL immediately so a refresh doesn't re-trigger
+      window.history.replaceState({}, '', window.location.pathname)
+      handleOAuthCallback(code)
+        .then(() => runSync())
+        .catch(err => console.error('[Auth] callback error:', err))
+    } else {
+      // Pull on every app open
+      runSync()
+    }
+  }, [])
+
+  async function runSync() {
+    setSyncing(true)
+    await syncAll()
+    setSyncing(false)
+  }
 
   if (viewNote) {
     return (
@@ -32,7 +56,7 @@ export default function App() {
     return (
       <div className="app">
         <div className="screen">
-          <Settings onBack={() => setShowSettings(false)} />
+          <Settings onBack={() => setShowSettings(false)} onSync={runSync} />
         </div>
       </div>
     )
@@ -40,11 +64,19 @@ export default function App() {
 
   return (
     <div className="app">
+      {syncing && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, height: 2,
+          background: 'var(--accent)', zIndex: 200,
+          animation: 'pulse 1.5s ease-in-out infinite'
+        }} />
+      )}
+
       <div className="screen">
         {tab === 'capture' && <CaptureScreen onOpenSettings={() => setShowSettings(true)} />}
-        {tab === 'queue'   && <QueueScreen />}
+        {tab === 'queue'   && <QueueScreen   onSync={runSync} />}
         {tab === 'review'  && <ReviewScreen />}
-        {tab === 'search'  && <SearchScreen onViewNote={setViewNote} />}
+        {tab === 'search'  && <SearchScreen  onViewNote={setViewNote} />}
       </div>
 
       <nav className="tab-bar">

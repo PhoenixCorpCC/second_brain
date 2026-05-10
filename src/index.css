@@ -273,6 +273,11 @@ mark { background: #fff3cd; color: inherit; border-radius: 2px; padding: 0 2px; 
 /* ── Toasts ── */
 .toast-wrap { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 200; pointer-events: none; }
 .toast { background: #1a1a1a; color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 14px; white-space: nowrap; animation: fadeInOut 2.5s ease forwards; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 @keyframes fadeInOut {
   0%   { opacity: 0; transform: translateY(-8px); }
   15%  { opacity: 1; transform: translateY(0); }
