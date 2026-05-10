@@ -1,32 +1,10 @@
 import { GOOGLE_CLIENT_ID } from '../config.js'
 import { db } from './db.js'
 
-const SCOPES         = 'https://www.googleapis.com/auth/drive'
-const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth'
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
-const API_BASE       = 'https://www.googleapis.com/drive/v3'
-const UPLOAD_BASE    = 'https://www.googleapis.com/upload/drive/v3'
-const ROOT_FOLDER    = 'second-brain'
-
-// ── PKCE helpers ──────────────────────────────────────────────────────────────
-
-function base64urlEncode(buf) {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
-}
-
-function generateVerifier() {
-  return base64urlEncode(crypto.getRandomValues(new Uint8Array(32)))
-}
-
-async function generateChallenge(verifier) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
-  return base64urlEncode(digest)
-}
-
-function getRedirectUri() {
-  return window.location.origin + '/second_brain/'
-}
+const SCOPES      = 'https://www.googleapis.com/auth/drive'
+const API_BASE    = 'https://www.googleapis.com/drive/v3'
+const UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3'
+const ROOT_FOLDER = 'second-brain'
 
 // ── Settings (key-value in IndexedDB) ────────────────────────────────────────
 
@@ -51,61 +29,79 @@ async function setTokens(tokens) {
 
 export async function isConnected() {
   const tokens = await getTokens()
-  return !!tokens?.access_token
+  if (!tokens?.access_token) return false
+  // Still valid if not expired
+  const expiresAt = tokens.stored_at + (tokens.expires_in - 60) * 1000
+  return Date.now() < expiresAt
 }
 
 export async function getLastSynced() {
   return getSetting('last_synced')
 }
 
-// ── OAuth PKCE flow ───────────────────────────────────────────────────────────
+// ── Google Identity Services (GIS) auth ───────────────────────────────────────
+// No client_secret, no redirect URI — popup-based token grant.
 
-export async function startAuth() {
-  const verifier  = generateVerifier()
-  const challenge = await generateChallenge(verifier)
-  await setSetting('pkce_verifier', verifier)
+let _tokenClient = null
 
-  const params = new URLSearchParams({
-    client_id:             GOOGLE_CLIENT_ID,
-    redirect_uri:          getRedirectUri(),
-    response_type:         'code',
-    scope:                 SCOPES,
-    code_challenge:        challenge,
-    code_challenge_method: 'S256',
-    access_type:           'offline',
-    prompt:                'consent',
+function waitForGIS() {
+  return new Promise(resolve => {
+    const check = () => {
+      if (window.google?.accounts?.oauth2) resolve()
+      else setTimeout(check, 100)
+    }
+    check()
   })
-
-  window.location.href = `${AUTH_ENDPOINT}?${params}`
 }
 
-export async function handleOAuthCallback(code) {
-  const verifier = await getSetting('pkce_verifier')
-  if (!verifier) throw new Error('No PKCE verifier — auth may have started in a different session')
-
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id:     GOOGLE_CLIENT_ID,
-      redirect_uri:  getRedirectUri(),
-      grant_type:    'authorization_code',
-      code_verifier: verifier,
-    }),
+async function getTokenClient() {
+  if (_tokenClient) return _tokenClient
+  await waitForGIS()
+  _tokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: SCOPES,
+    callback: () => {}, // overridden per-request below
   })
+  return _tokenClient
+}
 
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Token exchange failed: ${text}`)
-  }
+export async function startAuth() {
+  const client = await getTokenClient()
+  return new Promise((resolve, reject) => {
+    client.callback = async response => {
+      if (response.error) { reject(new Error(response.error)); return }
+      await setTokens({
+        access_token: response.access_token,
+        expires_in:   response.expires_in,
+        token_type:   response.token_type,
+      })
+      resolve()
+    }
+    client.requestAccessToken({ prompt: 'consent' })
+  })
+}
 
-  const tokens = await res.json()
-  await setTokens(tokens)
-  await setSetting('pkce_verifier', null)
+export async function silentRefresh() {
+  const client = await getTokenClient()
+  return new Promise((resolve, reject) => {
+    client.callback = async response => {
+      if (response.error) { reject(new Error(response.error)); return }
+      await setTokens({
+        access_token: response.access_token,
+        expires_in:   response.expires_in,
+        token_type:   response.token_type,
+      })
+      resolve(response.access_token)
+    }
+    client.requestAccessToken({ prompt: '' }) // no UI if still signed in
+  })
 }
 
 export async function disconnect() {
+  const tokens = await getTokens()
+  if (tokens?.access_token && window.google?.accounts?.oauth2) {
+    window.google.accounts.oauth2.revoke(tokens.access_token, () => {})
+  }
   await setSetting('drive_tokens', null)
   await setSetting('drive_folder_ids', null)
   await setSetting('last_synced', null)
@@ -113,43 +109,28 @@ export async function disconnect() {
 
 // ── Token refresh ─────────────────────────────────────────────────────────────
 
-async function refreshIfNeeded() {
+async function getAccessToken() {
   const tokens = await getTokens()
-  if (!tokens) throw new Error('Not connected to Drive')
+  if (!tokens?.access_token) throw new Error('Not connected to Drive')
 
   const expiresAt = tokens.stored_at + (tokens.expires_in - 60) * 1000
   if (Date.now() < expiresAt) return tokens.access_token
 
-  if (!tokens.refresh_token) throw new Error('Access token expired and no refresh token available')
-
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id:     GOOGLE_CLIENT_ID,
-      grant_type:    'refresh_token',
-      refresh_token: tokens.refresh_token,
-    }),
-  })
-
-  if (!res.ok) throw new Error('Token refresh failed — please reconnect Drive')
-
-  const fresh = await res.json()
-  await setTokens({ ...tokens, ...fresh })
-  return fresh.access_token
+  // Try silent refresh (no UI) — may fail if session expired
+  return silentRefresh()
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 async function apiFetch(url, options = {}) {
-  const token = await refreshIfNeeded()
+  const token = await getAccessToken()
   const res = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${token}`, ...options.headers },
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Drive API ${res.status}: ${text}`)
+    throw new Error(`Drive ${res.status}: ${text}`)
   }
   return res
 }
@@ -188,8 +169,8 @@ async function initFolders() {
   if (cached?.inbox && cached?.pwaData) return cached
 
   const root    = await findOrCreateFolder(ROOT_FOLDER, null)
-  const vault   = await findOrCreateFolder('vault',   root)
-  const inbox   = await findOrCreateFolder('Inbox',   vault)
+  const vault   = await findOrCreateFolder('vault',    root)
+  const inbox   = await findOrCreateFolder('Inbox',    vault)
   const pwaData = await findOrCreateFolder('pwa-data', root)
   await findOrCreateFolder('Books', vault)
 
@@ -209,7 +190,7 @@ async function findFile(name, parentId) {
 }
 
 async function upsertFile(name, content, mimeType, parentId) {
-  const token    = await refreshIfNeeded()
+  const token    = await getAccessToken()
   const existing = await findFile(name, parentId)
 
   const metadata = existing ? {} : { name, parents: [parentId] }
@@ -220,10 +201,9 @@ async function upsertFile(name, content, mimeType, parentId) {
   const url    = existing
     ? `${UPLOAD_BASE}/files/${existing.id}?uploadType=multipart`
     : `${UPLOAD_BASE}/files?uploadType=multipart`
-  const method = existing ? 'PATCH' : 'POST'
 
   const res = await fetch(url, {
-    method,
+    method: existing ? 'PATCH' : 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
@@ -297,11 +277,10 @@ export async function syncAll() {
       for (const [id, remote] of remoteMap) {
         const local = localMap.get(id)
         if (!local) { merged.push(remote); continue }
-        const localTime  = local.last_reviewed_at  ?? ''
-        const remoteTime = remote.last_reviewed_at ?? ''
-        merged.push(localTime > remoteTime ? local : remote)
+        const lt = local.last_reviewed_at ?? ''
+        const rt = remote.last_reviewed_at ?? ''
+        merged.push(lt > rt ? local : remote)
       }
-      // Local-only cards (not yet pushed to Drive)
       for (const [id, local] of localMap) {
         if (!remoteMap.has(id)) merged.push(local)
       }
@@ -310,9 +289,7 @@ export async function syncAll() {
       if (merged.length) await db.flashcards.bulkAdd(merged)
     }
 
-    // Push local state up
     await pushLocalState()
-
     await setSetting('last_synced', new Date().toISOString())
     return { synced: true }
   } catch (err) {

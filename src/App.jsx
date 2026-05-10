@@ -5,7 +5,7 @@ import ReviewScreen   from './components/ReviewScreen.jsx'
 import SearchScreen   from './components/SearchScreen.jsx'
 import Settings       from './components/Settings.jsx'
 import NoteViewer     from './components/NoteViewer.jsx'
-import { handleOAuthCallback, syncAll } from './lib/drive.js'
+import { syncAll } from './lib/drive.js'
 
 const TABS = [
   { id: 'capture', label: 'Capture', icon: IconCapture },
@@ -21,19 +21,8 @@ export default function App() {
   const [syncing, setSyncing]   = useState(false)
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const code   = params.get('code')
-
-    if (code) {
-      // Clean URL immediately so a refresh doesn't re-trigger
-      window.history.replaceState({}, '', window.location.pathname)
-      handleOAuthCallback(code)
-        .then(() => runSync())
-        .catch(err => console.error('[Auth] callback error:', err))
-    } else {
-      // Pull on every app open
-      runSync()
-    }
+    // Pull from Drive on every app open (no-op if not connected)
+    runSync()
   }, [])
 
   async function runSync() {
